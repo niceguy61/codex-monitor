@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 
 import { MonitorStore } from './lib/monitor.js';
 import { SessionIngestor } from './lib/session-ingest.js';
+import { SqliteEventStore, buildSqlitePaths } from './lib/sqlite-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,6 +16,10 @@ const dataDir = process.env.CODEX_MONITOR_DATA_DIR || path.join(repoRoot, '.data
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 3001);
 const sessionsRoot = process.env.CODEX_SESSIONS_DIR || path.join(process.env.HOME || '', '.codex', 'sessions');
+const sqlitePaths = buildSqlitePaths(dataDir);
+
+const sqliteStore = new SqliteEventStore(sqlitePaths);
+sqliteStore.init();
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -26,6 +31,7 @@ const contentTypes = {
 const store = new MonitorStore({
   repoPath: repoRoot,
   dataDir,
+  sqliteStore,
 });
 
 const ingestor = new SessionIngestor({
@@ -76,6 +82,30 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/history/events') {
+    const limit = Number(url.searchParams.get('limit') || 50);
+    sendJson(res, 200, {
+      items: sqliteStore.getRecentEvents(Math.max(1, Math.min(limit, 200))),
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/history/event-types') {
+    const limit = Number(url.searchParams.get('limit') || 12);
+    sendJson(res, 200, {
+      items: sqliteStore.getEventTypeSummary(Math.max(1, Math.min(limit, 50))),
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/history/daily-tokens') {
+    const limit = Number(url.searchParams.get('limit') || 30);
+    sendJson(res, 200, {
+      items: sqliteStore.getDailyTokenSummary(Math.max(1, Math.min(limit, 120))),
+    });
+    return;
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/stream') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -108,7 +138,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/healthz') {
-    sendJson(res, 200, { ok: true });
+    sendJson(res, 200, { ok: true, sqlite: sqliteStore.getStats() });
     return;
   }
 

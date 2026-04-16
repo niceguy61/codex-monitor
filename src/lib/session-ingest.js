@@ -112,34 +112,32 @@ function parseLineToEvents(parsed, repoPath) {
     if (args.workdir && args.workdir !== repoPath) return [];
     const events = [];
 
-    if (name === 'exec_command') {
+    events.push({
+      eventType: 'tool_start',
+      timestamp: parsed.timestamp,
+      source: 'session_log',
+      toolName: name,
+      summary: args.cmd || name,
+      payload: {
+        call_id: parsed.payload.call_id,
+        arguments: args,
+      },
+      fingerprint: `tool_start|${parsed.payload.call_id}|${name}|${args.cmd || ''}|${parsed.timestamp}`,
+    });
+
+    if (name === 'exec_command' && args.sandbox_permissions === 'require_escalated') {
       events.push({
-        eventType: 'tool_start',
+        eventType: 'approval_request',
         timestamp: parsed.timestamp,
         source: 'session_log',
         toolName: name,
-        summary: args.cmd || name,
+        summary: args.justification || args.cmd || 'approval requested',
         payload: {
           call_id: parsed.payload.call_id,
           arguments: args,
         },
-        fingerprint: `tool_start|${parsed.payload.call_id}|${args.cmd || ''}|${parsed.timestamp}`,
+        fingerprint: `approval_request|${parsed.payload.call_id}|${parsed.timestamp}`,
       });
-
-      if (args.sandbox_permissions === 'require_escalated') {
-        events.push({
-          eventType: 'approval_request',
-          timestamp: parsed.timestamp,
-          source: 'session_log',
-          toolName: name,
-          summary: args.justification || args.cmd || 'approval requested',
-          payload: {
-            call_id: parsed.payload.call_id,
-            arguments: args,
-          },
-          fingerprint: `approval_request|${parsed.payload.call_id}|${parsed.timestamp}`,
-        });
-      }
     }
 
     return events;

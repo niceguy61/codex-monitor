@@ -4,12 +4,23 @@ const els = {
   stateBadge: document.querySelector('#stateBadge'),
   currentTool: document.querySelector('#currentTool'),
   lastEventAt: document.querySelector('#lastEventAt'),
+  tabButtons: [...document.querySelectorAll('[data-tab]')],
+  tabPanels: [...document.querySelectorAll('[data-panel]')],
   eventChart: document.querySelector('#eventChart'),
   fileChart: document.querySelector('#fileChart'),
   tokenChart: document.querySelector('#tokenChart'),
+  attributionChart: document.querySelector('#attributionChart'),
   lastTurnTokens: document.querySelector('#lastTurnTokens'),
   sessionTokens: document.querySelector('#sessionTokens'),
   contextUsage: document.querySelector('#contextUsage'),
+  insightRisk: document.querySelector('#insightRisk'),
+  insightLargestTurn: document.querySelector('#insightLargestTurn'),
+  insightDriver: document.querySelector('#insightDriver'),
+  insightFileChanges: document.querySelector('#insightFileChanges'),
+  insightHeavyTurns: document.querySelector('#insightHeavyTurns'),
+  attributionDrivers: document.querySelector('#attributionDrivers'),
+  heavyThreshold: document.querySelector('#heavyThreshold'),
+  heavyTurns: document.querySelector('#heavyTurns'),
   planBadge: document.querySelector('#planBadge'),
   primaryUsage: document.querySelector('#primaryUsage'),
   secondaryUsage: document.querySelector('#secondaryUsage'),
@@ -25,14 +36,15 @@ const stateMeta = {
 };
 
 const chartTheme = {
-  event: ['#bb4d00', '#d96f1b', '#f0a54a', '#255f38', '#4f7b5a', '#7f8f69'],
-  file: ['#255f38', '#4f7b5a', '#7f8f69', '#bb4d00', '#d96f1b', '#f0a54a'],
-  token: ['#1d2420', '#bb4d00', '#255f38'],
+  event: ['#4f46e5', '#7c3aed', '#2563eb', '#6b7280', '#9ca3af', '#d1d5db'],
+  file: ['#1f7a43', '#2f855a', '#65a30d', '#b45309', '#6b7280', '#d1d5db'],
+  token: ['#171717', '#b45309', '#1f7a43'],
 };
 
 const CHART_BORDER = 'rgba(255, 255, 255, 0.92)';
 
 const charts = {};
+let activeTab = 'overview';
 
 function formatTime(value) {
   if (!value) return '-';
@@ -86,9 +98,62 @@ function formatRemaining(value) {
   return `${minutes}m left`;
 }
 
+function renderChips(container, items, formatItem) {
+  if (!container) return;
+  if (!items.length) {
+    container.innerHTML = '<span class="chip chip-muted">-</span>';
+    return;
+  }
+  container.innerHTML = items.map(formatItem).join('');
+}
+
+function renderHeavyTurns(container, items) {
+  if (!container) return;
+  if (!items.length) {
+    container.innerHTML = '<div class="insight-row"><span class="chip chip-muted">No heavy turns</span></div>';
+    return;
+  }
+
+  container.innerHTML = items
+    .map(
+      (item) => `
+        <div class="insight-row">
+          <span class="chip">${formatNumber(item.totalTokens)}</span>
+          <span class="insight-meta mono">${(item.tags || ['unknown']).join(', ')}</span>
+        </div>
+      `,
+    )
+    .join('');
+}
+
 function makeChart(canvas, config) {
   if (!canvas || !window.Chart) return null;
   return new window.Chart(canvas, config);
+}
+
+function resizeCharts() {
+  requestAnimationFrame(() => {
+    for (const chart of Object.values(charts)) {
+      if (!chart) continue;
+      chart.resize();
+      chart.update('none');
+    }
+  });
+}
+
+function setActiveTab(tabName) {
+  activeTab = tabName;
+  for (const button of els.tabButtons) {
+    const isActive = button.dataset.tab === tabName;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-selected', String(isActive));
+  }
+  for (const panel of els.tabPanels) {
+    const isActive = panel.dataset.panel === tabName;
+    panel.classList.toggle('is-active', isActive);
+    panel.hidden = !isActive;
+  }
+  resizeCharts();
 }
 
 function chartCenterPlugin(textResolver) {
@@ -105,11 +170,11 @@ function chartCenterPlugin(textResolver) {
       ctx.save();
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#1d2420';
-      ctx.font = '700 24px "IBM Plex Mono"';
+      ctx.fillStyle = '#171717';
+      ctx.font = '700 24px "Geist Mono", "IBM Plex Mono"';
       ctx.fillText(text.value, x, y - 8);
-      ctx.fillStyle = '#5f665f';
-      ctx.font = '12px "IBM Plex Mono"';
+      ctx.fillStyle = '#666666';
+      ctx.font = '12px "Geist Mono", "IBM Plex Mono"';
       ctx.fillText(text.label, x, y + 14);
       ctx.restore();
     },
@@ -152,12 +217,12 @@ function upsertChart(key, canvas, type, points, palette, centerText) {
           type === 'bar' || type === 'line'
             ? {
                 x: {
-                  ticks: { color: '#5f665f' },
+                  ticks: { color: '#666666' },
                   grid: { display: false },
                 },
                 y: {
-                  ticks: { color: '#5f665f', precision: 0 },
-                  grid: { color: 'rgba(29, 36, 32, 0.08)' },
+                  ticks: { color: '#666666', precision: 0 },
+                  grid: { color: 'rgba(0, 0, 0, 0.08)' },
                 },
               }
             : {},
@@ -175,9 +240,9 @@ function upsertChart(key, canvas, type, points, palette, centerText) {
 function upsertTokenBreakdown(points) {
   const labels = points.map((point) => point.label);
   const datasets = [
-    { label: 'Input', data: points.map((point) => point.input), borderColor: CHART_BORDER, backgroundColor: '#1d2420' },
-    { label: 'Output', data: points.map((point) => point.output), borderColor: CHART_BORDER, backgroundColor: '#bb4d00' },
-    { label: 'Reasoning', data: points.map((point) => point.reasoning), borderColor: CHART_BORDER, backgroundColor: '#255f38' },
+    { label: 'Input', data: points.map((point) => point.input), borderColor: CHART_BORDER, backgroundColor: '#171717' },
+    { label: 'Output', data: points.map((point) => point.output), borderColor: CHART_BORDER, backgroundColor: '#b45309' },
+    { label: 'Reasoning', data: points.map((point) => point.reasoning), borderColor: CHART_BORDER, backgroundColor: '#1f7a43' },
   ];
 
   if (!charts.tokenBreakdown) {
@@ -194,13 +259,13 @@ function upsertTokenBreakdown(points) {
         scales: {
           x: {
             stacked: true,
-            ticks: { color: '#5f665f' },
+            ticks: { color: '#666666' },
             grid: { display: false },
           },
           y: {
             stacked: true,
-            ticks: { color: '#5f665f', precision: 0 },
-            grid: { color: 'rgba(29, 36, 32, 0.08)' },
+            ticks: { color: '#666666', precision: 0 },
+            grid: { color: 'rgba(0, 0, 0, 0.08)' },
           },
         },
       },
@@ -245,6 +310,13 @@ function render(snapshot) {
     chartTheme.file,
     () => ({ value: formatNumber(snapshot.totals.files), label: 'files' }),
   );
+  upsertChart(
+    'attribution',
+    els.attributionChart,
+    'bar',
+    snapshot.attribution?.topDriversChart || [],
+    ['#171717', '#4f46e5', '#1f7a43', '#b45309', '#9ca3af'],
+  );
   upsertTokenBreakdown(snapshot.charts.tokenTrend);
   els.lastTurnTokens.textContent = formatNumber(snapshot.tokens?.lastTurn?.total_tokens);
   els.sessionTokens.textContent = formatNumber(snapshot.tokens?.sessionTotal?.total_tokens);
@@ -266,6 +338,20 @@ function render(snapshot) {
   els.secondaryReset.textContent = snapshot.usage?.secondary
     ? `${formatRemaining(snapshot.usage.secondary.resets_at)} · ${formatReset(snapshot.usage.secondary.resets_at)}`
     : '-';
+  els.insightRisk.textContent = snapshot.insights?.limitRisk || '-';
+  els.insightLargestTurn.textContent = formatNumber(snapshot.insights?.largestTurn);
+  els.insightDriver.textContent = snapshot.insights?.dominantDriver || '-';
+  els.insightFileChanges.textContent = formatNumber(snapshot.insights?.fileChanges);
+  els.insightHeavyTurns.textContent = formatNumber(snapshot.insights?.heavyTurnCount);
+  renderChips(
+    els.attributionDrivers,
+    snapshot.attribution?.topDriversChart || [],
+    (item) => `<span class="chip">${item.label} ${item.percent}%</span>`,
+  );
+  els.heavyThreshold.textContent = snapshot.attribution?.heavyThreshold
+    ? `adaptive threshold: ${formatNumber(snapshot.attribution.heavyThreshold)}`
+    : '-';
+  renderHeavyTurns(els.heavyTurns, snapshot.attribution?.heavyTurns || []);
 }
 
 async function loadSnapshot() {
@@ -291,4 +377,10 @@ function connectStream() {
 }
 
 loadSnapshot().catch(() => {});
+for (const button of els.tabButtons) {
+  button.addEventListener('click', () => {
+    setActiveTab(button.dataset.tab);
+  });
+}
+setActiveTab(activeTab);
 connectStream();
