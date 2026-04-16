@@ -1,0 +1,14 @@
+{
+  "name": "codex-monitor-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "check": "node --check src/server.js && node --check src/lib/monitor.js && node --check src/lib/session-ingest.js && node --check hooks/send_event.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.9.0"
+  }
+}

@@ -1,7 +1,10 @@
 # codex-monitor
 
-Dependency-light Codex runtime monitor. The first deliverable is a browser dashboard; the backend
-is intentionally reusable for a later TUI.
+Codex runtime monitor with a split frontend/backend architecture.
+
+Current structure:
+- `frontend/` — Vite + React UI
+- `backend/` — Node + SQLite API and ingest layer
 
 ## Product Direction
 
@@ -17,54 +20,86 @@ In short:
 - CLI bottom bar: current state
 - codex-monitor: current state + usage analytics + execution flow
 
-## Web MVP
+## Current State
 
-Features:
+Implemented:
 - `POST /codex/events` ingest endpoint for a notify hook
-- polling of `~/.codex/sessions/*.jsonl` to derive tool and file events
-- computed runtime status instead of persisted state
-- static dashboard with current state, plan/quota status, token analytics, and event/file activity
+- polling of `~/.codex/sessions/*.jsonl` to derive tool, file, approval, and token events
+- SQLite-backed event persistence and history APIs
+- React frontend under `frontend/`
+- ECharts-based history/time-series charts
+- tabbed dashboard: `Overview`, `Tokens`, `Flow`, `Optimizer`
 
 Current dashboard priority:
-1. `Now` card with state, current tool, plan badge, quota usage, and reset countdown
-2. `Tokens` card with last turn, session total, context ratio, and token breakdown
-3. `Recent Events` mix chart
-4. `File Activity` mix chart
+1. `Now`
+2. summary strip (`5h/7d usage + reset`)
+3. time controls
+4. `Overview`
+5. `Tokens`
+6. `Flow`
+7. `Optimizer`
 
 Current layout target:
 - row 1: `Now`
-- row 2: `Plan/Quota`, `Tokens`
-- row 3: `Recent Events`, `File Activity`
+- row 2: summary strip
+- row 3: tabs + time controls + tab panels
 
 Near-term roadmap:
-- approaching-limit warning
-- heavy-turn detection
-- session insight card
+- React polish and parity with legacy static UI
+- richer optimizer heuristics
+- history views on top of SQLite APIs
 - edit/write/delete-focused file intelligence
 
 ## Run
 
+This project works best as a host-native tool because the backend needs direct access to:
+- `~/.codex/sessions`
+- local notify hooks
+- host filesystem paths and repo working directories
+- local SQLite data under `.data/`
+
+Backend API:
+
 ```bash
+cd backend
+npm install
 npm start
 ```
 
-Default URL: `http://127.0.0.1:3001`
+Frontend UI:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Default URLs:
+- frontend: `http://127.0.0.1:5173`
+- backend API: `http://127.0.0.1:3001`
+
+Development model:
+- `frontend/` is now the primary UI surface
+- `backend/` is the runtime ingest and API layer
+- the older static files under `public/` are legacy and should not be the primary target for new UI work
 
 ## Hook setup
 
 Point Codex `notify` to the hook script:
 
 ```toml
-notify = ["node", "/mnt/d/github/codex-monitor/hooks/send_event.js"]
+notify = ["node", "/mnt/d/github/codex-monitor/backend/hooks/send_event.js"]
 ```
 
 Optional env vars:
 - `PORT` or `CODEX_MONITOR_PORT`
 - `HOST` or `CODEX_MONITOR_HOST`
 - `CODEX_SESSIONS_DIR`
+- `CODEX_MONITOR_REPO_PATH`
 
 ## Checks
 
 ```bash
-npm run check
+cd backend && npm run check
+cd frontend && npm run build
 ```
