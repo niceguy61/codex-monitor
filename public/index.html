@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Monitor</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">Codex Monitor</p>
+        <h1>Live, compact, readable.</h1>
+      </header>
+
+      <section class="dashboard">
+        <article class="panel panel-status">
+          <div class="panel-head">
+            <h2>Now</h2>
+            <span id="generatedAt" class="timestamp">-</span>
+          </div>
+          <div class="status-stack">
+            <div class="hero-state">
+              <p id="stateBadge" class="badge">😴 Idle</p>
+              <p id="currentTool" class="tool-pill mono">-</p>
+            </div>
+            <div class="status-row">
+              <div>
+                <p class="label">Repo</p>
+                <p id="repoPath" class="value mono">-</p>
+              </div>
+              <div>
+                <p class="label">Last</p>
+                <p id="lastEventAt" class="value mono">-</p>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel panel-plan">
+          <div class="panel-head">
+            <div class="panel-title-inline">
+              <h2>Plan</h2>
+              <span id="planBadge" class="plan-chip">-</span>
+            </div>
+            <span class="timestamp">quota</span>
+          </div>
+          <div class="plan-layout">
+            <div class="usage-gauges">
+              <div class="token-card gauge-card">
+                <div class="usage-head">
+                  <p class="label">5h Window</p>
+                  <p id="primaryUsage" class="usage-pill mono">-</p>
+                </div>
+                <p id="primaryReset" class="gauge-foot mono">-</p>
+              </div>
+              <div class="token-card gauge-card">
+                <div class="usage-head">
+                  <p class="label">7d Window</p>
+                  <p id="secondaryUsage" class="usage-pill mono">-</p>
+                </div>
+                <p id="secondaryReset" class="gauge-foot mono">-</p>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel panel-tokens">
+          <div class="panel-head">
+            <h2>Tokens</h2>
+            <span class="timestamp">live</span>
+          </div>
+          <div class="token-grid">
+            <div class="token-card">
+              <p class="label">Last Turn</p>
+              <p id="lastTurnTokens" class="token-value mono">-</p>
+            </div>
+            <div class="token-card">
+              <p class="label">Session Total</p>
+              <p id="sessionTokens" class="token-value mono">-</p>
+            </div>
+            <div class="token-card">
+              <p class="label">Context</p>
+              <p id="contextUsage" class="token-value mono">-</p>
+            </div>
+          </div>
+          <div class="chart-wrap chart-wrap-token"><canvas id="tokenChart"></canvas></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Recent Events</h2>
+            <span class="timestamp">mix</span>
+          </div>
+          <div class="chart-wrap"><canvas id="eventChart"></canvas></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>File Activity</h2>
+            <span class="timestamp">mix</span>
+          </div>
+          <div class="chart-wrap"><canvas id="fileChart"></canvas></div>
+        </article>
+      </section>
+    </main>
+
+    <script src="/vendor/chart.js"></script>
+    <script src="/app.js" type="module"></script>
+  </body>
+  </html>
