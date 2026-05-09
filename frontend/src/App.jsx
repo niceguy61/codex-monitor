@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import './App.css'
 
@@ -38,6 +38,12 @@ function formatDateTimeLocal(date) {
   return `${year}-${month}-${day}T${hours}:${minutes}`
 }
 
+function formatMinutesUntil(resetAt, nowMs) {
+  if (!resetAt) return '0m left'
+  const minutes = Math.max(0, Math.floor((resetAt * 1000 - nowMs) / 60_000))
+  return `${formatCompactNumber(minutes)}m left`
+}
+
 function parseLastToMs(last) {
   const amount = Number(last.slice(0, -1))
   const unit = last.slice(-1)
@@ -62,6 +68,7 @@ function buildRangeParams(mode, last, from, to) {
 function EChart({ option, className = 'chart-host' }) {
   const ref = useRef(null)
   const chartRef = useRef(null)
+  const latestOptionRef = useRef(option)
 
   useEffect(() => {
     if (!ref.current) return undefined
@@ -69,8 +76,8 @@ function EChart({ option, className = 'chart-host' }) {
       if (!ref.current) return
       if (ref.current.clientWidth === 0 || ref.current.clientHeight === 0) return
       chartRef.current = echarts.init(ref.current)
-      if (option) {
-        chartRef.current.setOption(option, true)
+      if (latestOptionRef.current) {
+        chartRef.current.setOption(latestOptionRef.current, true)
       }
     })
     const observer = new ResizeObserver(() => {
@@ -86,8 +93,10 @@ function EChart({ option, className = 'chart-host' }) {
   }, [])
 
   useEffect(() => {
-    if (!chartRef.current || !option) return
-    chartRef.current.setOption(option, true)
+    latestOptionRef.current = option
+    if (chartRef.current && option) {
+      chartRef.current.setOption(option, true)
+    }
   }, [option])
 
   return <div ref={ref} className={className} />
@@ -246,32 +255,95 @@ function optimizerBarOption(optimizer) {
   }
 }
 
+function formatServiceSummary(item) {
+  if (!item?.summary) return 'recent activity'
+  const summary = String(item.summary).replace(/\s+/g, ' ').trim()
+  return summary.length > 84 ? `${summary.slice(0, 81)}...` : summary
+}
+
+function serviceLaneClass(lane) {
+  return `service-node lane-${lane || 'unknown'}`
+}
+
+function ServiceMapCard({ serviceMap }) {
+  const flow = serviceMap?.latestFlow
+  const nodes = flow?.nodes || []
+
+  return (
+    <section className="card card-service-map">
+      <div className="card-head">
+        <h2>Service Map</h2>
+        <span className="timestamp">{flow?.title || 'prompt to runtime'}</span>
+      </div>
+      <div className="service-flow">
+        {nodes.length ? nodes.map((node, index) => (
+          <div className="service-step" key={node.id}>
+            <article className={serviceLaneClass(node.lane)}>
+              <div className="service-node-kicker">
+                <span>{node.laneLabel}</span>
+                {node.count > 1 && <strong>x{formatCompactNumber(node.count)}</strong>}
+              </div>
+              <h3>{node.label}</h3>
+              <p>{formatServiceSummary(node)}</p>
+            </article>
+            {index < nodes.length - 1 && (
+              <div className="service-arrow" aria-hidden="true">
+                <span />
+              </div>
+            )}
+          </div>
+        )) : (
+          <article className="service-empty">
+            <strong>No flow yet</strong>
+            <p>Send a prompt and the runtime path will appear here.</p>
+          </article>
+        )}
+      </div>
+      <div className="service-legend">
+        {(serviceMap?.lanes || []).map((lane) => (
+          <span key={lane.key}>
+            {lane.label} <strong>{formatCompactNumber(lane.total)}</strong>
+          </span>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function App() {
   const [snapshot, setSnapshot] = useState(null)
   const [activeTab, setActiveTab] = useState('overview')
   const [mode, setMode] = useState('last')
   const [lastValue, setLastValue] = useState(DEFAULT_LAST.value)
   const [lastUnit, setLastUnit] = useState(DEFAULT_LAST.unit)
-  const [rangeFrom, setRangeFrom] = useState(formatDateTimeLocal(new Date(Date.now() - parseLastToMs('5m'))))
-  const [rangeTo, setRangeTo] = useState(formatDateTimeLocal(new Date()))
+  const [rangeFrom, setRangeFrom] = useState(() => formatDateTimeLocal(new Date(Date.now() - parseLastToMs('5m'))))
+  const [rangeTo, setRangeTo] = useState(() => formatDateTimeLocal(new Date()))
   const [series, setSeries] = useState({ tokens: [], events: [], files: [] })
+  const [nowMs, setNowMs] = useState(() => Date.now())
 
   const last = `${lastValue}${lastUnit}`
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/snapshot')
-      .then((res) => res.json())
-      .then((data) => {
-        if (!cancelled) setSnapshot(data)
-      })
-      .catch(() => {})
+    const loadSnapshot = () => {
+      setNowMs(Date.now())
+      fetch('/api/snapshot')
+        .then((res) => res.json())
+        .then((data) => {
+          if (!cancelled) setSnapshot(data)
+        })
+        .catch(() => {})
+    }
+
+    loadSnapshot()
+    const intervalId = window.setInterval(loadSnapshot, 2_000)
     return () => {
       cancelled = true
+      window.clearInterval(intervalId)
     }
   }, [])
 
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     const params = buildRangeParams(mode, last, rangeFrom, rangeTo)
     const [tokensRes, eventsRes, filesRes] = await Promise.all([
       fetch(`/api/history/timeseries?metric=tokens&${params.toString()}`),
@@ -284,11 +356,33 @@ function App() {
       events: events.items || [],
       files: files.items || [],
     })
-  }
+  }, [last, mode, rangeFrom, rangeTo])
 
   useEffect(() => {
-    loadHistory().catch(() => {})
-  }, [])
+    let cancelled = false
+    const params = buildRangeParams(mode, last, rangeFrom, rangeTo)
+
+    Promise.all([
+      fetch(`/api/history/timeseries?metric=tokens&${params.toString()}`),
+      fetch(`/api/history/timeseries?metric=events&${params.toString()}`),
+      fetch(`/api/history/timeseries?metric=files&${params.toString()}`),
+    ])
+      .then(([tokensRes, eventsRes, filesRes]) => Promise.all([tokensRes.json(), eventsRes.json(), filesRes.json()]))
+      .then(([tokens, events, files]) => {
+        if (!cancelled) {
+          setSeries({
+            tokens: tokens.items || [],
+            events: events.items || [],
+            files: files.items || [],
+          })
+        }
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [last, mode, rangeFrom, rangeTo])
 
   const planType = snapshot?.usage?.planType || '-'
   const stateLabel = snapshot?.status?.state || 'idle'
@@ -297,7 +391,7 @@ function App() {
     <main className="app-shell">
       <header className="hero">
         <div className="brand-row">
-          <img src="/public/codex-color.svg" alt="" className="brand-mark" />
+          <img src="/codex-color.svg" alt="" className="brand-mark" />
           <p className="eyebrow">Codex Monitor</p>
         </div>
         <h1>Usage and flow, not just status.</h1>
@@ -333,7 +427,7 @@ function App() {
             <div className="summary-item">
               <div>
                 <p className="label">5h Reset</p>
-                <p className="value">{snapshot?.usage?.primary ? `${formatCompactNumber(snapshot.usage.primary.resets_at ? Math.max(0, Math.floor((snapshot.usage.primary.resets_at * 1000 - Date.now()) / 60000)) : 0)}m left` : '-'}</p>
+                <p className="value">{snapshot?.usage?.primary ? formatMinutesUntil(snapshot.usage.primary.resets_at, nowMs) : '-'}</p>
               </div>
             </div>
             <div className="summary-item">
@@ -345,11 +439,13 @@ function App() {
             <div className="summary-item">
               <div>
                 <p className="label">7d Reset</p>
-                <p className="value">{snapshot?.usage?.secondary ? `${formatCompactNumber(snapshot.usage.secondary.resets_at ? Math.max(0, Math.floor((snapshot.usage.secondary.resets_at * 1000 - Date.now()) / 60000)) : 0)}m left` : '-'}</p>
+                <p className="value">{snapshot?.usage?.secondary ? formatMinutesUntil(snapshot.usage.secondary.resets_at, nowMs) : '-'}</p>
               </div>
             </div>
           </div>
         </section>
+
+        <ServiceMapCard serviceMap={snapshot?.serviceMap} />
 
         <section className="tabs">
           <div className="tab-list">

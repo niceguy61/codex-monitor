@@ -7,6 +7,8 @@ const IDLE_THRESHOLD_MS = 30_000;
 const TOP_BUCKET_COUNT = 6;
 const TOKEN_TREND_COUNT = 10;
 const HEAVY_TURN_MIN_THRESHOLD = 100_000;
+const SERVICE_MAP_LIMIT = 5;
+const SERVICE_FLOW_LIMIT = 8;
 
 function toIso(value) {
   if (!value) return new Date().toISOString();
@@ -105,6 +107,173 @@ function classifyActivity(event) {
     return toolName;
   }
   return null;
+}
+
+function serviceLaneForEvent(event) {
+  const toolName = String(event.toolName || '').toLowerCase();
+  const eventType = String(event.eventType || '').toLowerCase();
+
+  if (eventType === 'user_prompt') return 'prompts';
+  if (eventType === 'skill_usage') return 'skills';
+  if (['spawn_agent', 'send_input', 'wait_agent', 'close_agent', 'resume_agent'].includes(toolName)) {
+    return 'agents';
+  }
+  if (event.fileEventType || eventType.startsWith('file_')) return 'artifacts';
+  if (eventType === 'token_usage' || eventType === 'approval_request' || eventType === 'approval_result') return 'usage';
+  if (eventType === 'tool_start' || eventType === 'tool_complete') return 'tools';
+  return null;
+}
+
+function serviceLabelForEvent(event) {
+  if (event.eventType === 'user_prompt') return 'prompt';
+  if (event.eventType === 'skill_usage') return event.toolName ? `$${event.toolName}` : event.summary || 'skill';
+  if (event.fileEventType) return event.fileEventType;
+  if (event.eventType === 'token_usage') return 'token_usage';
+  if (event.eventType === 'approval_request') return 'approval';
+  return event.toolName || event.summary || event.eventType;
+}
+
+function shortSummary(value, limit = 96) {
+  const summary = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!summary) return '';
+  return summary.length > limit ? `${summary.slice(0, limit - 3)}...` : summary;
+}
+
+function serviceNodeForEvent(event) {
+  const laneKey = serviceLaneForEvent(event);
+  if (!laneKey) return null;
+  if (laneKey === 'usage') return null;
+
+  const laneLabels = {
+    prompts: 'Prompt',
+    skills: 'Skill',
+    agents: 'Agent',
+    tools: 'Tool',
+    artifacts: 'Artifact',
+  };
+
+  return {
+    id: `${laneKey}-${event.id || event.fingerprint || event.timestamp}`,
+    lane: laneKey,
+    laneLabel: laneLabels[laneKey] || laneKey,
+    label: serviceLabelForEvent(event),
+    summary: shortSummary(event.summary || event.message || event.eventType),
+    timestamp: event.timestamp,
+    count: 1,
+  };
+}
+
+function compactFlowNodes(nodes) {
+  const compacted = [];
+
+  for (const node of nodes) {
+    const previous = compacted[compacted.length - 1];
+    if (previous && previous.lane === node.lane && previous.label === node.label) {
+      previous.count += 1;
+      previous.timestamp = node.timestamp;
+      if (!previous.summary && node.summary) previous.summary = node.summary;
+      continue;
+    }
+    compacted.push({ ...node });
+  }
+
+  if (compacted.length <= SERVICE_FLOW_LIMIT) return compacted;
+
+  const prompt = compacted[0]?.lane === 'prompts' ? compacted[0] : null;
+  const tailLimit = prompt ? SERVICE_FLOW_LIMIT - 1 : SERVICE_FLOW_LIMIT;
+  return [
+    ...(prompt ? [prompt] : []),
+    ...compacted.slice(-tailLimit),
+  ];
+}
+
+function deriveLatestServiceFlow(events) {
+  const chronologicalEvents = [...events].sort((a, b) => {
+    const aTime = new Date(a.timestamp).getTime();
+    const bTime = new Date(b.timestamp).getTime();
+    return aTime - bTime;
+  });
+  const lastPromptIndex = chronologicalEvents.map((event) => event.eventType).lastIndexOf('user_prompt');
+  const turnEvents = lastPromptIndex >= 0 ? chronologicalEvents.slice(lastPromptIndex) : chronologicalEvents.slice(-80);
+  const stageOrder = ['prompts', 'skills', 'agents', 'tools', 'artifacts'];
+  const nodesByStage = new Map(stageOrder.map((stage) => [stage, new Map()]));
+
+  for (const node of turnEvents.map(serviceNodeForEvent).filter(Boolean)) {
+    const stage = nodesByStage.get(node.lane);
+    if (!stage) continue;
+    const key = node.lane === 'prompts' ? 'prompt' : node.label;
+    const existing = stage.get(key);
+    if (existing) {
+      existing.count += 1;
+      existing.timestamp = node.timestamp;
+      if (node.summary) existing.summary = node.summary;
+    } else {
+      stage.set(key, { ...node });
+    }
+  }
+
+  const nodes = compactFlowNodes(stageOrder.flatMap((stage) => [...nodesByStage.get(stage).values()]));
+
+  return {
+    title: lastPromptIndex >= 0 ? 'Latest Prompt Flow' : 'Recent Runtime Flow',
+    prompt: nodes.find((node) => node.lane === 'prompts') || null,
+    nodes,
+    edges: nodes.slice(1).map((node, index) => ({
+      from: nodes[index].id,
+      to: node.id,
+    })),
+  };
+}
+
+function deriveServiceMap(events) {
+  const laneDefs = [
+    { key: 'prompts', label: 'Prompt' },
+    { key: 'skills', label: 'Skills' },
+    { key: 'agents', label: 'Agents' },
+    { key: 'tools', label: 'Tools' },
+    { key: 'artifacts', label: 'Artifacts' },
+    { key: 'usage', label: 'Usage' },
+  ];
+  const lanes = new Map(laneDefs.map((lane) => [lane.key, { ...lane, items: new Map(), total: 0 }]));
+
+  for (const event of events) {
+    const laneKey = serviceLaneForEvent(event);
+    if (!laneKey || !lanes.has(laneKey)) continue;
+    const lane = lanes.get(laneKey);
+    const label = serviceLabelForEvent(event);
+    const existing = lane.items.get(label) || {
+      label,
+      count: 0,
+      latestAt: null,
+      summary: null,
+    };
+
+    existing.count += 1;
+    existing.latestAt = event.timestamp;
+    existing.summary = event.summary || null;
+    lane.total += 1;
+    lane.items.set(label, existing);
+  }
+
+  return {
+    lanes: [...lanes.values()].map((lane) => ({
+      key: lane.key,
+      label: lane.label,
+      total: lane.total,
+      items: [...lane.items.values()]
+        .sort((a, b) => new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime())
+        .slice(0, SERVICE_MAP_LIMIT),
+    })),
+    edges: [
+      ['prompts', 'skills'],
+      ['skills', 'agents'],
+      ['skills', 'tools'],
+      ['agents', 'tools'],
+      ['tools', 'artifacts'],
+      ['tools', 'usage'],
+    ],
+    latestFlow: deriveLatestServiceFlow(events),
+  };
 }
 
 function deriveAttribution(events, tokenEvents) {
@@ -352,6 +521,7 @@ export class MonitorStore {
           }
         : null,
       attribution,
+      serviceMap: deriveServiceMap(this.events),
       insights: deriveOverviewInsights(
         this.events,
         this.fileEvents,
@@ -455,7 +625,11 @@ export class MonitorStore {
   }
 
   #deriveStatus() {
-    const recent = [...this.events].reverse();
+    const recent = [...this.events].sort((a, b) => {
+      const aTime = new Date(a.timestamp).getTime();
+      const bTime = new Date(b.timestamp).getTime();
+      return bTime - aTime;
+    });
     if (!recent.length) {
       return {
         state: 'idle',

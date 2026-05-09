@@ -41,6 +41,42 @@ function safeJsonParse(line) {
   }
 }
 
+function extractTextContent(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((item) => item?.text || item?.input_text || item?.output_text || '')
+    .filter(Boolean)
+    .join('\n');
+}
+
+function extractSkillNames(text) {
+  const names = new Set();
+  const source = String(text || '');
+  for (const match of source.matchAll(/\$([a-z][a-z0-9-]*)\b/gi)) {
+    names.add(match[1]);
+  }
+  for (const match of source.matchAll(/(?:using|activate|run|invoke)\s+([a-z][a-z0-9-]*)\s+skill\b/gi)) {
+    names.add(match[1]);
+  }
+  return [...names];
+}
+
+function buildSkillEvents(timestamp, text, sourceId) {
+  return extractSkillNames(text).map((name) => ({
+    eventType: 'skill_usage',
+    timestamp,
+    source: 'session_log',
+    toolName: name,
+    summary: `$${name}`,
+    payload: {
+      skillName: name,
+      text,
+    },
+    fingerprint: `skill_usage|${timestamp}|${sourceId}|${name}`,
+  }));
+}
+
 function buildFileEvent(base, item) {
   if (!item?.path) return null;
   const eventType =
@@ -91,6 +127,54 @@ function parseApplyPatchInput(input) {
 
 function parseLineToEvents(parsed, repoPath) {
   if (!parsed?.timestamp || !parsed?.type) return [];
+
+  if (parsed.type === 'event_msg' && parsed.payload?.type === 'user_message') {
+    return [
+      {
+        eventType: 'user_prompt',
+        timestamp: parsed.timestamp,
+        source: 'session_log',
+        summary: parsed.payload.message || 'user prompt',
+        payload: parsed.payload,
+        fingerprint: `user_prompt|${parsed.timestamp}|${parsed.payload.message || ''}`,
+      },
+    ];
+  }
+
+  if (parsed.type === 'event_msg' && parsed.payload?.type === 'agent_message') {
+    const text = parsed.payload.message || '';
+    return [
+      {
+        eventType: 'assistant_update',
+        timestamp: parsed.timestamp,
+        source: 'session_log',
+        summary: text || 'assistant update',
+        payload: parsed.payload,
+        fingerprint: `assistant_update|${parsed.timestamp}|${text}`,
+      },
+      ...buildSkillEvents(parsed.timestamp, text, `agent_message|${parsed.timestamp}`),
+    ];
+  }
+
+  if (parsed.type === 'response_item' && parsed.payload?.type === 'message') {
+    const text = extractTextContent(parsed.payload.content);
+    if (parsed.payload.role === 'user') {
+      return [
+        {
+          eventType: 'user_prompt',
+          timestamp: parsed.timestamp,
+          source: 'session_log',
+          summary: text || 'user prompt',
+          payload: parsed.payload,
+          fingerprint: `user_prompt|${parsed.timestamp}|${text}`,
+        },
+      ];
+    }
+
+    if (parsed.payload.role === 'assistant') {
+      return buildSkillEvents(parsed.timestamp, text, `assistant_message|${parsed.timestamp}`);
+    }
+  }
 
   if (parsed.type === 'session_meta') {
     if (parsed.payload?.cwd !== repoPath) return [];
