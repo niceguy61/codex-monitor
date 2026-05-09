@@ -78,6 +78,47 @@ Default URLs:
 - frontend: `http://127.0.0.1:5173`
 - backend API: `http://127.0.0.1:3001`
 
+## Linux TUI Direction
+
+The next TUI should be a Linux-native terminal application, not a JavaScript dashboard rendered in a terminal.
+
+Target shape:
+- keyboard-first, `htop`/`k9s` style
+- no always-on web server requirement
+- local session ingest from `~/.codex/sessions`
+- focused on current status, recent events, and drill-down
+
+MVP scope:
+1. top status bar: repo, state, current tool, last event age
+2. main event list with keyboard navigation
+3. detail pane for the selected event
+4. recent file activity pane
+5. refresh/filter/help keys
+
+Recommended implementation direction:
+- Go + Bubble Tea for the first Linux TUI pass
+- reuse the existing ingest/event derivation logic as the reference behavior
+- keep observability ambitions out of the first terminal version
+
+This means the current web app remains the observability/dashboard surface, while the future Linux TUI is a separate operator console.
+
+Current TUI entrypoint:
+
+```bash
+go run ./cmd/codex-monitor-tui
+```
+
+Build a local binary:
+
+```bash
+go build ./cmd/codex-monitor-tui
+```
+
+Optional flags:
+- `-repo /path/to/repo`
+- `-sessions-dir ~/.codex/sessions`
+- `-interval 2s`
+
 Development model:
 - `frontend/` is now the primary UI surface
 - `backend/` is the runtime ingest and API layer
@@ -102,4 +143,5 @@ Optional env vars:
 ```bash
 cd backend && npm run check
 cd frontend && npm run build
+env GOCACHE=/tmp/go-build GOMODCACHE=/tmp/go-mod go test ./cmd/codex-monitor-tui ./internal/...
 ```
